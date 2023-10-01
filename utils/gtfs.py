@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from shapely.geometry import LineString
 import geopandas as gpd
+from keplergl import KeplerGl
 
 class GTFSReadFiles:
 
@@ -12,7 +13,7 @@ class GTFSReadFiles:
 
     def _load_data(self, subfolder=""):
         folder_path = os.path.join(self.directory, subfolder)
-        file_names = ["agency.txt", "stop_times.txt", "calendar_dates.txt", "trips.txt", "stops.txt", "routes.txt"]
+        file_names = ["agency.txt", "stop_times.txt", "calendar_dates.txt", "trips.txt", "stops.txt", "routes.txt", "shapes.txt"]
         for file_name in file_names:
             file_path = os.path.join(folder_path, file_name)
             if os.path.exists(file_path):
@@ -44,7 +45,13 @@ class GTFSStops:
     
     def __init__(self, dataframes):
         self.dfs = dataframes
+        self.stop_route_map = self._generate_stop_route_map()
         
+    def _generate_stop_route_map(self):
+        merged_df = self.dfs["stop_times"].merge(self.dfs["trips"], on="trip_id").merge(self.dfs["routes"], on="route_id")
+        stop_route_map = merged_df.groupby("stop_id")["route_short_name"].unique().to_dict()
+        return stop_route_map
+    
     def get_positions(self):
         positions_data = self.dfs["stops"][["stop_id", "stop_name", "stop_lat", "stop_lon"]]
         return positions_data
@@ -56,11 +63,16 @@ class GTFSStops:
             if rid not in lines['route_id']:
                 lines['route_id'].append(rid)
                 rnam = self.dfs["routes"][self.dfs["routes"]["route_id"] == rid].route_short_name.values[0]
-                lines['route_name'].append(rnam)
+                lines['route_name'].append(str(rnam))
                 rst = self.dfs["stop_times"]
                 stop_seq_id = rst.loc[(rst["trip_id"] == trip) & (rst["stop_id"] == stop_id)].stop_sequence.values[0]
-                prev_stop = rst.loc[(rst["trip_id"] == trip) & (rst["stop_sequence"] == stop_seq_id - 1)].stop_id.values[0]
-                next_stop = rst.loc[(rst["trip_id"] == trip) & (rst["stop_sequence"] == stop_seq_id + 1)].stop_id.values[0]
+                
+                prev_stops = rst.loc[(rst["trip_id"] == trip) & (rst["stop_sequence"] == stop_seq_id - 1)].stop_id.values
+                prev_stop = prev_stops[0] if prev_stops.size > 0 else None
+                
+                next_stops = rst.loc[(rst["trip_id"] == trip) & (rst["stop_sequence"] == stop_seq_id + 1)].stop_id.values
+                next_stop = next_stops[0] if next_stops.size > 0 else None
+                
                 lines['previous_stop'].append(prev_stop)
                 lines['next_stop'].append(next_stop)
 
@@ -69,12 +81,19 @@ class GTFSStops:
     
     def get_plot_df(self):
         df = self.get_positions()
-        for i in df.index:
-            lines = self.get_lines(df.loc[i, 'stop_id'])
-            df.iloc[i, 'lines'] = lines['route_name'].values
+        df['lines'] = df['stop_id'].map(lambda x: ', '.join(map(str, self.stop_route_map.get(x, []))))
         return df
 
-    
+
+class GTFSPlots:
+
+    def __init__(self, size=600):
+        self.map = KeplerGl(height=size)
+
+    def plot_stops(self, stops_df):
+        self.map.add_data(data=stops_df, name="stops")
+
+
 
 
 
